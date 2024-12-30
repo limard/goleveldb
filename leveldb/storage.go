@@ -3,7 +3,6 @@ package leveldb
 import (
 	"sync/atomic"
 
-	"github.com/syndtr/goleveldb/leveldb/crypto"
 	"github.com/syndtr/goleveldb/leveldb/storage"
 )
 
@@ -20,7 +19,7 @@ func (c *iStorage) Open(fd storage.FileDesc) (storage.Reader, error) {
 	if EncryptionKey == nil {
 		return &iStorageReader{r, c, nil, 0}, err
 	}
-	cipher := crypto.NewCipher(EncryptionKey)
+	cipher := newCipher(EncryptionKey)
 	return &iStorageReader{r, c, cipher, 0}, err
 }
 
@@ -29,7 +28,7 @@ func (c *iStorage) Create(fd storage.FileDesc) (storage.Writer, error) {
 	if EncryptionKey == nil {
 		return &iStorageWriter{w, c, nil, 0}, err
 	}
-	cipher := crypto.NewCipher(EncryptionKey)
+	cipher := newCipher(EncryptionKey)
 	return &iStorageWriter{w, c, cipher, 0}, err
 }
 
@@ -49,7 +48,7 @@ func newIStorage(s storage.Storage) *iStorage {
 type iStorageReader struct {
 	storage.Reader
 	c      *iStorage
-	cipher *crypto.Cipher
+	cipher *cipher
 	offset int64
 }
 
@@ -83,7 +82,7 @@ func (r *iStorageReader) ReadAt(p []byte, off int64) (n int, err error) {
 type iStorageWriter struct {
 	storage.Writer
 	c      *iStorage
-	cipher *crypto.Cipher
+	cipher *cipher
 	offset int64
 }
 
@@ -104,4 +103,40 @@ func (w *iStorageWriter) Write(p []byte) (n int, err error) {
 	}
 	atomic.AddUint64(&w.c.write, uint64(n))
 	return n, err
+}
+
+type cipher struct {
+	key []byte
+}
+
+func newCipher(key []byte) *cipher {
+	if key == nil {
+		key = []byte("goleveldb-key")
+	}
+	return &cipher{key: key}
+}
+
+func (c *cipher) EncryptAt(data []byte, offset int64) []byte {
+	result := make([]byte, len(data))
+	keyLen := int64(len(c.key))
+
+	keyOffset := offset % keyLen
+
+	for i := 0; i < len(data); i++ {
+		keyIndex := (keyOffset + int64(i)) % keyLen
+		result[i] = data[i] ^ c.key[keyIndex]
+	}
+	return result
+}
+
+func (c *cipher) DecryptAt(data []byte, offset int64) []byte {
+	return c.EncryptAt(data, offset)
+}
+
+func (c *cipher) Encrypt(data []byte) []byte {
+	return c.EncryptAt(data, 0)
+}
+
+func (c *cipher) Decrypt(data []byte) []byte {
+	return c.DecryptAt(data, 0)
 }
